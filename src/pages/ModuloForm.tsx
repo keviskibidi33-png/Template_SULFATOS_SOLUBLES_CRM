@@ -4,6 +4,7 @@ import toast from 'react-hot-toast'
 import { Beaker, Download, Loader2, Trash2 } from 'lucide-react'
 import { getEnsayoDetail, saveAndDownload, saveEnsayo } from '@/services/api'
 import type { SulfatosSolublesPayload } from '@/types'
+import FormatConfirmModal from '../components/FormatConfirmModal'
 
 const MODULE_TITLE = 'Sulfatos Solubles'
 const FILE_PREFIX = 'SULFATOS_SOLUBLES'
@@ -14,13 +15,6 @@ const APROBADORES = ['-', 'IRMA COAQUIRA'] as const
 const SECADO_OPTIONS = ['', 'X'] as const
 
 const getCurrentYearShort = () => new Date().getFullYear().toString().slice(-2)
-const formatTodayShortDate = () => {
-    const d = new Date()
-    const dd = String(d.getDate()).padStart(2, '0')
-    const mm = String(d.getMonth() + 1).padStart(2, '0')
-    const yy = String(d.getFullYear()).slice(-2)
-    return `${dd}/${mm}/${yy}`
-}
 
 const normalizeMuestraCode = (raw: string): string => {
     const value = raw.trim().toUpperCase()
@@ -140,9 +134,9 @@ const initialState = (): FormState => ({
     equipo_balanza_001_codigo: '',
     equipo_balanza_codigo: '',
     revisado_por: '-',
-    revisado_fecha: formatTodayShortDate(),
+    revisado_fecha: '',
     aprobado_por: '-',
-    aprobado_fecha: formatTodayShortDate(),
+    aprobado_fecha: '',
 })
 
 const hydrateForm = (payload?: Partial<SulfatosSolublesPayload>): FormState => {
@@ -248,6 +242,8 @@ export default function ModuloForm() {
     }, [resolvedResiduo, resolvedTitulacion])
 
     const resolvedContenido = form.contenido_sulfatos_ppm ?? computedContenido
+    const [pendingFormatAction, setPendingFormatAction] = useState<boolean | null>(null)
+
 
     const save = useCallback(
         async (download: boolean) => {
@@ -660,14 +656,14 @@ export default function ModuloForm() {
                                 Limpiar todo
                             </button>
                             <button
-                                onClick={() => void save(false)}
+                                onClick={() => setPendingFormatAction(false)}
                                 disabled={loading}
                                 className="h-11 rounded-lg border border-slate-900 bg-white font-semibold text-slate-900 shadow-sm transition hover:bg-slate-100 disabled:opacity-50"
                             >
                                 {loading ? 'Guardando...' : 'Guardar'}
                             </button>
                             <button
-                                onClick={() => void save(true)}
+                                onClick={() => setPendingFormatAction(true)}
                                 disabled={loading}
                                 className="flex h-11 items-center justify-center gap-2 rounded-lg border border-emerald-700 bg-emerald-700 font-semibold text-white shadow-sm transition hover:bg-emerald-800 disabled:opacity-50"
                             >
@@ -687,6 +683,19 @@ export default function ModuloForm() {
                     </div>
                 </div>
             </div>
+            <FormatConfirmModal
+                open={pendingFormatAction !== null}
+                formatLabel={`Formato N-xxxx-SU-${new Date().getFullYear().toString().slice(-2)} SULFATOS SOLUBLES`}
+                actionLabel={pendingFormatAction ? 'Guardar y Descargar' : 'Guardar'}
+                onClose={() => setPendingFormatAction(null)}
+                onConfirm={() => {
+                    if (pendingFormatAction === null) return
+                    const shouldDownload = pendingFormatAction
+                    setPendingFormatAction(null)
+                    void save(shouldDownload)
+                }}
+            />
+
         </div>
     )
 }
