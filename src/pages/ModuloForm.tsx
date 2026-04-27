@@ -380,7 +380,7 @@ export default function ModuloForm() {
                                             onBlur={() => setField('fecha_ensayo', normalizeFlexibleDate(form.fecha_ensayo))}
                                             autoComplete="off"
                                             data-lpignore="true"
-                                            placeholder="DD/MM/AA"
+                                            placeholder="YYYY/MM/DD"
                                         />
                                     </td>
                                     <td className="border-t border-slate-300 p-1" colSpan={2}>
@@ -630,7 +630,7 @@ export default function ModuloForm() {
                                         onBlur={() => setField('revisado_fecha', normalizeFlexibleDate(form.revisado_fecha))}
                                         autoComplete="off"
                                         data-lpignore="true"
-                                        placeholder="DD/MM/AA"
+                                        placeholder="YYYY/MM/DD"
                                     />
                                 </div>
                             </div>
@@ -655,7 +655,7 @@ export default function ModuloForm() {
                                         onBlur={() => setField('aprobado_fecha', normalizeFlexibleDate(form.aprobado_fecha))}
                                         autoComplete="off"
                                         data-lpignore="true"
-                                        placeholder="DD/MM/AA"
+                                        placeholder="YYYY/MM/DD"
                                     />
                                 </div>
                             </div>
