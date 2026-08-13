@@ -1,792 +1,723 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+
 import axios from 'axios'
+
 import toast from 'react-hot-toast'
-import { Beaker, Download, Loader2, Trash2 } from 'lucide-react'
+
+import { Download, Loader2, RotateCcw, Save } from 'lucide-react'
+
 import { getEnsayoDetail, saveAndDownload, saveEnsayo } from '@/services/api'
-import type { SulfatosSolublesPayload } from '@/types'
-import FormatConfirmModal from '../components/FormatConfirmModal'
+
+import { resolveModuleFromPath } from '@/modules/config'
+
+import {
+
+    DEFAULT_DENSE_INPUT_CLASS,
+
+    DEFAULT_READONLY_INPUT_CLASS,
+
+    DEFAULT_SELECT_CLASS,
+
+    DEFAULT_TEXTAREA_CLASS,
+
+    buildFormatPreview,
+
+    cloneWithDerive,
+
+    downloadBlob,
+
+    getByPath,
+
+    normalizeFlexibleDate,
+
+    normalizeMuestraCode,
+
+    normalizeNumeroOtCode,
+
+} from '@/modules/helpers'
+
+import type { InputOptions, ModuleConfig, ModuleFormState, RenderTools } from '@/modules/types'
+
+import type { GenericPayload } from '@/types'
 
 
-const buildFormatPreview = (sampleCode: string | undefined, materialCode: 'SU' | 'AG', ensayo: string) => {
-    const currentYear = new Date().getFullYear().toString().slice(-2)
-    const normalized = (sampleCode || '').trim().toUpperCase()
-    const fullMatch = normalized.match(/^(\d+)(?:-[A-Z0-9. ]+)?-(\d{2,4})$/)
-    const partialMatch = normalized.match(/^(\d+)(?:-(\d{2,4}))?$/)
-    const match = fullMatch || partialMatch
-    const numero = match?.[1] || 'xxxx'
-    const year = (match?.[2] || currentYear).slice(-2)
-    return `Formato N-${numero}-${materialCode}-${year} ${ensayo}`
-}
 
-
-const MODULE_TITLE = 'Sulfatos Solubles'
-// const FILE_PREFIX = 'SULFATOS_SOLUBLES'
-const DRAFT_KEY = 'sulfatos-solubles_form_draft_v2'
 const DEBOUNCE_MS = 700
-const REVISORES = ['-', 'FABIAN LA ROSA'] as const
-const APROBADORES = ['-', 'IRMA COAQUIRA'] as const
-const SECADO_OPTIONS = ['', 'X'] as const
 
-const getCurrentYearShort = () => new Date().getFullYear().toString().slice(-2)
+const FORCED_MODULE_SLUG = (import.meta.env.VITE_MODULE_SLUG || '').trim()
 
-const normalizeMuestraCode = (raw: string): string => {
-    const value = raw.trim().toUpperCase()
-    if (!value) return ''
-    const compact = value.replace(/\s+/g, '')
-    const year = getCurrentYearShort()
-    const match = compact.match(/^(\d+)(?:-[A-Z]+)?(?:-(\d{2}))?$/)
-    return match ? `${match[1]}-${match[2] || year}` : value
-}
 
-const normalizeNumeroOtCode = (raw: string): string => {
-    const value = raw.trim().toUpperCase()
-    if (!value) return ''
-    const compact = value.replace(/\s+/g, '')
-    const year = getCurrentYearShort()
-    const patterns = [/^(?:N?OT-)?(\d+)(?:-(\d{2}))?$/, /^(\d+)(?:-(?:N?OT))?(?:-(\d{2}))?$/]
-    for (const pattern of patterns) {
-        const match = compact.match(pattern)
-        if (match) return `${match[1]}-${match[2] || year}`
-    }
-    return value
-}
 
-const normalizeFlexibleDate = (raw: string): string => {
-    const value = raw.trim()
-    if (!value) return ''
-    const digits = value.replace(/\D/g, '')
-    const currentYear = String(new Date().getFullYear())
-    const pad2 = (part: string) => part.padStart(2, '0').slice(-2)
-    const normalizeYear = (part: string) => {
-        const clean = part.replace(/\D/g, '')
-        if (clean.length >= 4) return clean.slice(0, 4)
-        if (clean.length === 2) return `20${clean}`
-        if (clean.length === 1) return `200${clean}`
-        return currentYear
-    }
-    const build = (y: string, m: string, d: string) => `${normalizeYear(y)}/${pad2(m)}/${pad2(d)}`
+const getEnsayoId = (): number | null => {
 
-    if (value.includes('/') || value.includes('-')) {
-        const [a = '', b = '', c = ''] = value.split(/[/-]/).map((part) => part.trim())
-        if (!a || !b) return value
-        if (a.length === 4) return build(a, b, c || '01')
-        if (c) return build(c, b, a)
-        return value
-    }
-
-    if (digits.length === 8) {
-        if (digits.startsWith('19') || digits.startsWith('20')) return build(digits.slice(0, 4), digits.slice(4, 6), digits.slice(6, 8))
-        return build(digits.slice(4, 8), digits.slice(2, 4), digits.slice(0, 2))
-    }
-    if (digits.length === 6) return build(digits.slice(4, 6), digits.slice(2, 4), digits.slice(0, 2))
-    if (digits.length === 5) return build(digits.slice(3, 5), digits.slice(1, 3), digits[0])
-    if (digits.length === 4) return build(currentYear, digits.slice(0, 2), digits.slice(2, 4))
-    if (digits.length === 3) return build(currentYear, digits[0], digits.slice(1, 3))
-    if (digits.length === 2) return build(currentYear, digits[0], digits[1])
-
-    return value
-}
-
-const parseNum = (value: string) => {
-    if (value.trim() === '') return null
-    const parsed = Number(value)
-    return Number.isFinite(parsed) ? parsed : null
-}
-
-const round = (value: number, decimals = 4) => {
-    const factor = 10 ** decimals
-    return Math.round(value * factor) / factor
-}
-
-const getEnsayoId = () => {
     const raw = new URLSearchParams(window.location.search).get('ensayo_id')
-    const n = Number(raw)
-    return Number.isInteger(n) && n > 0 ? n : null
+
+    const parsed = Number(raw)
+
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+
 }
 
-type FormState = {
-    muestra: string
-    numero_ot: string
-    fecha_ensayo: string
-    realizado_por: string
-    condicion_secado_aire: string
-    condicion_secado_horno: string
-    capsula_numero: string
-    volumen_agua_ml: number | null
-    peso_suelo_seco_g: number | null
-    alicuota_tomada_ml: number | null
-    titulacion_suelo_g: number | null
-    solucion_cloruro_bario: string
-    peso_crisol_g: number | null
-    peso_crisol_residuos_g: number | null
-    residuo_sulfatos_g: number | null
-    contenido_sulfatos_ppm: number | null
-    observaciones: string
-    equipo_horno_codigo: string
-    equipo_mufla_codigo: string
-    equipo_balanza_001_codigo: string
-    equipo_balanza_codigo: string
-    revisado_por: string
-    revisado_fecha: string
-    aprobado_por: string
-    aprobado_fecha: string
+
+
+const alignmentClass = (align?: InputOptions['align']) => {
+
+    if (align === 'center') return 'text-center'
+
+    if (align === 'right') return 'text-right'
+
+    return 'text-left'
+
 }
 
-const initialState = (): FormState => ({
-    muestra: '',
-    numero_ot: '',
-    fecha_ensayo: '',
-    realizado_por: '',
-    condicion_secado_aire: '',
-    condicion_secado_horno: '',
-    capsula_numero: '',
-    volumen_agua_ml: null,
-    peso_suelo_seco_g: null,
-    alicuota_tomada_ml: null,
-    titulacion_suelo_g: null,
-    solucion_cloruro_bario: '',
-    peso_crisol_g: null,
-    peso_crisol_residuos_g: null,
-    residuo_sulfatos_g: null,
-    contenido_sulfatos_ppm: null,
-    observaciones: '',
-    equipo_horno_codigo: '',
-    equipo_mufla_codigo: '',
-    equipo_balanza_001_codigo: '',
-    equipo_balanza_codigo: '',
-    revisado_por: '-',
-    revisado_fecha: '',
-    aprobado_por: '-',
-    aprobado_fecha: '',
-})
 
-const hydrateForm = (payload?: Partial<SulfatosSolublesPayload>): FormState => {
-    const base = initialState()
-    if (!payload) return base
 
-    return {
-        ...base,
-        ...payload,
-        condicion_secado_aire: payload.condicion_secado_aire ?? base.condicion_secado_aire,
-        condicion_secado_horno: payload.condicion_secado_horno ?? base.condicion_secado_horno,
-        capsula_numero: payload.capsula_numero ?? base.capsula_numero,
-        volumen_agua_ml: payload.volumen_agua_ml ?? base.volumen_agua_ml,
-        peso_suelo_seco_g: payload.peso_suelo_seco_g ?? base.peso_suelo_seco_g,
-        alicuota_tomada_ml: payload.alicuota_tomada_ml ?? base.alicuota_tomada_ml,
-        titulacion_suelo_g: payload.titulacion_suelo_g ?? base.titulacion_suelo_g,
-        solucion_cloruro_bario: payload.solucion_cloruro_bario ?? base.solucion_cloruro_bario,
-        peso_crisol_g: payload.peso_crisol_g ?? base.peso_crisol_g,
-        peso_crisol_residuos_g: payload.peso_crisol_residuos_g ?? base.peso_crisol_residuos_g,
-        residuo_sulfatos_g: payload.residuo_sulfatos_g ?? base.residuo_sulfatos_g,
-        contenido_sulfatos_ppm: payload.contenido_sulfatos_ppm ?? base.contenido_sulfatos_ppm,
-        equipo_horno_codigo: payload.equipo_horno_codigo ?? base.equipo_horno_codigo,
-        equipo_mufla_codigo: payload.equipo_mufla_codigo ?? base.equipo_mufla_codigo,
-        equipo_balanza_001_codigo: payload.equipo_balanza_001_codigo ?? base.equipo_balanza_001_codigo,
-        equipo_balanza_codigo: payload.equipo_balanza_codigo ?? base.equipo_balanza_codigo,
-    }
-}
+const resolveCurrentModule = () => (
+
+    typeof window === 'undefined' ? null : resolveModuleFromPath(window.location.pathname, FORCED_MODULE_SLUG)
+
+)
+
+
+
+const SHEET_META_INPUT_CLASS =
+
+    '!h-8 !rounded-none !border-0 !bg-transparent !px-2 !text-[13px] !font-medium !text-black !shadow-none focus:!ring-0'
+
+
 
 export default function ModuloForm() {
-    const [form, setForm] = useState<FormState>(() => initialState())
+
+    const [moduleConfig, setModuleConfig] = useState<ModuleConfig | null>(resolveCurrentModule)
+
+    const [ensayoId, setEnsayoId] = useState<number | null>(() => (typeof window === 'undefined' ? null : getEnsayoId()))
+
+    const [form, setForm] = useState<ModuleFormState>({})
+
     const [loading, setLoading] = useState(false)
+
     const [loadingEdit, setLoadingEdit] = useState(false)
-    const [ensayoId, setEnsayoId] = useState<number | null>(() => getEnsayoId())
-    const [showDraftBanner, setShowDraftBanner] = useState(false)
-    const [draftData, setDraftData] = useState<FormState | null>(null)
+
+    const draftKeyRef = useRef<string | null>(null)
+
+
 
     useEffect(() => {
-        if (ensayoId) return
-        const raw = localStorage.getItem(`${DRAFT_KEY}:new`)
-        if (!raw) return
-        try {
-            const parsed = JSON.parse(raw) as Partial<SulfatosSolublesPayload>
-            setForm(hydrateForm(parsed))
-        } catch {
-            localStorage.removeItem(`${DRAFT_KEY}:new`)
-        }
-    }, [ensayoId])
+
+        if (!moduleConfig) return
+
+        setForm(moduleConfig.derive(moduleConfig.defaultState()))
+
+    }, [moduleConfig])
+
+
 
     useEffect(() => {
-        const t = window.setTimeout(() => {
-            localStorage.setItem(`${DRAFT_KEY}:${ensayoId ?? 'new'}`, JSON.stringify(form))
-        }, DEBOUNCE_MS)
-        return () => window.clearTimeout(t)
-    }, [form, ensayoId])
 
-    useEffect(() => {
-        if (!ensayoId) return
-        let cancel = false
-        const run = async () => {
-            setLoadingEdit(true)
-            try {
-                const detail = await getEnsayoDetail(ensayoId)
-                if (!cancel && detail.payload) {
-                    const serverState = hydrateForm(detail.payload)
-                    const rawDraft = localStorage.getItem(`${DRAFT_KEY}:${ensayoId}`)
-                    if (rawDraft) {
-                        try {
-                            const parsedDraft = JSON.parse(rawDraft) as Partial<SulfatosSolublesPayload>
-                            const draftState = hydrateForm(parsedDraft)
-                            if (JSON.stringify(draftState) !== JSON.stringify(serverState)) {
-                                setDraftData(draftState)
-                                setShowDraftBanner(true)
-                            } else {
-                                localStorage.removeItem(`${DRAFT_KEY}:${ensayoId}`)
-                            }
-                        } catch {
-                            // Ignored
-                        }
-                    }
-                    setForm(serverState)
-                }
-            } catch {
-                toast.error('No se pudo cargar ensayo de sulfatos solubles.')
-            } finally {
-                if (!cancel) setLoadingEdit(false)
-            }
-        }
-        void run()
-        return () => {
-            cancel = true
-        }
-    }, [ensayoId])
+        if (typeof window === 'undefined') return
 
-    const setField = useCallback(<K extends keyof FormState>(key: K, value: FormState[K]) => {
-        setForm((prev) => ({ ...prev, [key]: value }))
+        setModuleConfig(resolveModuleFromPath(window.location.pathname, FORCED_MODULE_SLUG))
+
+        setEnsayoId(getEnsayoId())
+
     }, [])
 
-    const clearAll = useCallback(() => {
-        if (!window.confirm('Se limpiaran los datos no guardados. Deseas continuar?')) return
-        localStorage.removeItem(`${DRAFT_KEY}:${ensayoId ?? 'new'}`)
-        setForm(initialState())
-    }, [ensayoId])
-
-    const computedTitulacion = useMemo(() => {
-        if (form.volumen_agua_ml == null || form.peso_suelo_seco_g == null || form.alicuota_tomada_ml == null) return null
-        if (form.volumen_agua_ml === 0 || form.alicuota_tomada_ml === 0) return null
-        return round(form.peso_suelo_seco_g / (form.volumen_agua_ml / form.alicuota_tomada_ml), 4)
-    }, [form.volumen_agua_ml, form.peso_suelo_seco_g, form.alicuota_tomada_ml])
-
-    const resolvedTitulacion = form.titulacion_suelo_g ?? computedTitulacion
-
-    const computedResiduo = useMemo(() => {
-        if (form.peso_crisol_g == null || form.peso_crisol_residuos_g == null) return null
-        return round(form.peso_crisol_residuos_g - form.peso_crisol_g, 4)
-    }, [form.peso_crisol_g, form.peso_crisol_residuos_g])
-
-    const resolvedResiduo = form.residuo_sulfatos_g ?? computedResiduo
-
-    const computedContenido = useMemo(() => {
-        if (resolvedResiduo == null || resolvedTitulacion == null || resolvedTitulacion === 0) return null
-        return round((resolvedResiduo * 411500) / resolvedTitulacion, 3)
-    }, [resolvedResiduo, resolvedTitulacion])
-
-    const resolvedContenido = form.contenido_sulfatos_ppm ?? computedContenido
-    const [pendingFormatAction, setPendingFormatAction] = useState<boolean | null>(null)
 
 
-    const save = useCallback(
-        async (download: boolean) => {
-            if (!form.muestra || !form.numero_ot || !form.fecha_ensayo) {
-                toast.error('Complete Muestra, N OT y Fecha de ensayo.')
-                return
-            }
-            setLoading(true)
+    useEffect(() => {
+
+        if (!moduleConfig) return
+
+        const draftKey = `${moduleConfig.draftKey}:${ensayoId ?? 'new'}`
+
+        draftKeyRef.current = draftKey
+
+        const raw = localStorage.getItem(draftKey)
+
+        if (!raw) return
+
+        try {
+
+            const parsed = JSON.parse(raw) as ModuleFormState
+
+            setForm(moduleConfig.derive({ ...moduleConfig.defaultState(), ...parsed }))
+
+        } catch {
+
+            localStorage.removeItem(draftKey)
+
+        }
+
+    }, [moduleConfig, ensayoId])
+
+
+
+    useEffect(() => {
+
+        if (!moduleConfig || !draftKeyRef.current) return
+
+        const timeout = window.setTimeout(() => {
+
+            localStorage.setItem(draftKeyRef.current as string, JSON.stringify(form))
+
+        }, DEBOUNCE_MS)
+
+        return () => window.clearTimeout(timeout)
+
+    }, [form, moduleConfig])
+
+
+
+    useEffect(() => {
+
+        if (typeof window === 'undefined') return
+
+        if (window.parent === window) return
+
+        window.parent.postMessage({ type: 'IFRAME_READY' }, '*')
+
+    }, [])
+
+
+
+    useEffect(() => {
+
+        if (!moduleConfig || !ensayoId) return
+
+        let cancelled = false
+
+        const run = async () => {
+
+            setLoadingEdit(true)
+
             try {
-                const payload: SulfatosSolublesPayload = {
-                    ...form,
-                    titulacion_suelo_g: resolvedTitulacion,
-                    residuo_sulfatos_g: resolvedResiduo,
-                    contenido_sulfatos_ppm: resolvedContenido,
+
+                const detail = await getEnsayoDetail(moduleConfig.apiSlug, ensayoId)
+
+                if (!cancelled && detail.payload) {
+
+                    setForm(moduleConfig.derive({ ...moduleConfig.defaultState(), ...detail.payload }))
+
                 }
 
-                if (download) {
-                    const downloadResult = await saveAndDownload(payload, ensayoId ?? undefined)
-                    const blob = downloadResult instanceof Blob ? downloadResult : downloadResult.blob
-                    const filename = downloadResult instanceof Blob ? undefined : downloadResult.filename
-                    const url = URL.createObjectURL(blob)
-                    const a = document.createElement('a')
-                    a.href = url
-                    a.download = filename || `${buildFormatPreview(form.muestra, 'SU', 'SULFATOS SOLUBLES')}.xlsx`
-                    a.click()
-                    URL.revokeObjectURL(url)
-                } else {
-                    await saveEnsayo(payload, ensayoId ?? undefined)
-                }
-                localStorage.removeItem(`${DRAFT_KEY}:${ensayoId ?? 'new'}`)
-                setForm(initialState())
-                setEnsayoId(null)
-                if (window.parent !== window) window.parent.postMessage({ type: 'CLOSE_MODAL' }, '*')
-                toast.success(download ? 'Sulfatos solubles guardado y descargado.' : 'Sulfatos solubles guardado.')
-            } catch (err) {
-                const msg = axios.isAxiosError(err)
-                    ? err.response?.data?.detail || 'No se pudo generar Sulfatos Solubles.'
-                    : 'No se pudo generar Sulfatos Solubles.'
-                toast.error(msg)
+            } catch {
+
+                toast.error(`No se pudo cargar ensayo de ${moduleConfig.title.toLowerCase()}.`)
+
             } finally {
-                setLoading(false)
+
+                if (!cancelled) setLoadingEdit(false)
+
             }
+
+        }
+
+        void run()
+
+        return () => {
+
+            cancelled = true
+
+        }
+
+    }, [ensayoId, moduleConfig])
+
+
+
+    const setField = useCallback(
+
+        (path: string, value: unknown) => {
+
+            if (!moduleConfig) return
+
+            setForm((prev) => cloneWithDerive(prev, path, value, moduleConfig.derive))
+
         },
-        [
-            ensayoId,
-            form,
-            resolvedContenido,
-            resolvedResiduo,
-            resolvedTitulacion,
-        ],
+
+        [moduleConfig],
+
     )
 
-    const denseInputClass =
-        'h-8 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-900 shadow-sm transition focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500/35'
 
-    const readOnlyInputClass = 'h-8 w-full rounded-md border border-slate-200 bg-slate-100 px-2 text-sm text-slate-800'
+
+    const stringValue = useCallback((path: string) => {
+
+        const value = getByPath(form, path)
+
+        return value === null || value === undefined ? '' : String(value)
+
+    }, [form])
+
+
+
+    const numberValue = useCallback((path: string) => {
+
+        const value = getByPath(form, path)
+
+        return typeof value === 'number' && Number.isFinite(value) ? value : null
+
+    }, [form])
+
+
+
+    const value = useCallback((path: string) => getByPath(form, path), [form])
+
+
+
+    const renderText = useCallback((path: string, options: InputOptions = {}) => (
+
+        <input
+
+            className={`${DEFAULT_DENSE_INPUT_CLASS} ${alignmentClass(options.align)} ${options.className || ''}`.trim()}
+
+            value={stringValue(path)}
+
+            onChange={(event) => setField(path, event.target.value)}
+
+            onBlur={() => {
+
+                if (!options.normalizeOnBlur) return
+
+                setField(path, options.normalizeOnBlur(stringValue(path)))
+
+            }}
+
+            placeholder={options.placeholder}
+
+            autoComplete="off"
+
+            data-lpignore="true"
+
+        />
+
+    ), [setField, stringValue])
+
+
+
+    const renderNumber = useCallback((path: string, options: InputOptions = {}) => (
+
+        <input
+
+            type="number"
+
+            className={`${DEFAULT_DENSE_INPUT_CLASS} ${alignmentClass(options.align ?? 'center')} ${options.className || ''}`.trim()}
+
+            value={numberValue(path) ?? ''}
+
+            onChange={(event) => {
+
+                const raw = event.target.value
+
+                setField(path, raw === '' ? null : Number(raw))
+
+            }}
+
+            placeholder={options.placeholder}
+
+            step={options.step || 'any'}
+
+            min={options.min}
+
+            max={options.max}
+
+            autoComplete="off"
+
+            data-lpignore="true"
+
+        />
+
+    ), [numberValue, setField])
+
+
+
+    const renderReadonly = useCallback((path: string, options: InputOptions = {}) => (
+
+        <input
+
+            className={`${DEFAULT_READONLY_INPUT_CLASS} ${alignmentClass(options.align ?? 'center')} ${options.className || ''}`.trim()}
+
+            value={stringValue(path)}
+
+            readOnly
+
+            tabIndex={-1}
+
+        />
+
+    ), [stringValue])
+
+
+
+    const renderSelect = useCallback((path: string, options: InputOptions & { values: Array<{ label: string; value: string }> }) => (
+
+        <select
+
+            className={`${DEFAULT_SELECT_CLASS} ${alignmentClass(options.align)} ${options.className || ''}`.trim()}
+
+            value={stringValue(path)}
+
+            onChange={(event) => {
+                const nextValue = event.target.value === '' ? null : event.target.value
+                setField(path, nextValue)
+                if ((path === 'revisado_por' || path === 'aprobado_por') && nextValue && nextValue !== '-') {
+                    setField(path === 'revisado_por' ? 'revisado_fecha' : 'aprobado_fecha', normalizeFlexibleDate(new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Lima' })))
+                }
+            }}
+
+            autoComplete="off"
+
+            data-lpignore="true"
+
+        >
+
+            {options.values.map((item) => (
+
+                <option key={`${path}-${item.value || 'empty'}`} value={item.value}>
+
+                    {item.label}
+
+                </option>
+
+            ))}
+
+        </select>
+
+    ), [setField, stringValue])
+
+
+
+    const renderTextarea = useCallback((path: string, options: InputOptions = {}) => (
+
+        <textarea
+
+            className={`${DEFAULT_TEXTAREA_CLASS} ${options.className || ''}`.trim()}
+
+            value={stringValue(path)}
+
+            onChange={(event) => setField(path, event.target.value)}
+
+            rows={options.rows || 4}
+
+            placeholder={options.placeholder}
+
+            autoComplete="off"
+
+            data-lpignore="true"
+
+        />
+
+    ), [setField, stringValue])
+
+
+
+    const tools: RenderTools = {
+
+        text: renderText,
+
+        number: renderNumber,
+
+        readonly: renderReadonly,
+
+        select: renderSelect,
+
+        textarea: renderTextarea,
+
+        value,
+
+        stringValue,
+
+        numberValue,
+
+    }
+
+
+
+    const clearAll = useCallback(() => {
+
+        if (!moduleConfig) return
+
+        if (!window.confirm('Se limpiaran los datos no guardados. Deseas continuar?')) return
+
+        localStorage.removeItem(`${moduleConfig.draftKey}:${ensayoId ?? 'new'}`)
+
+        setForm(moduleConfig.derive(moduleConfig.defaultState()))
+
+    }, [ensayoId, moduleConfig])
+
+
+
+    const save = useCallback(async (download: boolean) => {
+
+
+        if (!moduleConfig) return
+
+        const payload = moduleConfig.derive(form) as GenericPayload
+
+        if (!payload.muestra || !payload.numero_ot || !payload.fecha_ensayo || !payload.realizado_por) {
+
+            toast.error('Complete Muestra, N OT, Fecha de ensayo y Realizado.')
+
+            return
+
+        }
+
+
+
+        setLoading(true)
+
+        try {
+
+            let savedId = ensayoId
+
+            if (download) {
+
+                const { blob, ensayoId: returnedId, filename } = await saveAndDownload(moduleConfig.apiSlug, payload, ensayoId ?? undefined)
+
+                downloadBlob(
+
+                    blob,
+
+                    filename || `${buildFormatPreview(String(payload.muestra), moduleConfig.materialCode, moduleConfig.downloadLabel)}.xlsx`,
+
+                )
+
+                if (returnedId) savedId = returnedId
+
+            } else {
+
+                const saved = await saveEnsayo(moduleConfig.apiSlug, payload, ensayoId ?? undefined)
+
+                savedId = saved.id
+
+            }
+
+            // Preservar ID para ediciones posteriores sin crear duplicados
+            if (savedId && savedId !== ensayoId) {
+
+                setEnsayoId(savedId)
+
+                localStorage.removeItem(`${moduleConfig.draftKey}:new`)
+
+                const newUrl = new URL(window.location.href)
+
+                newUrl.searchParams.set('ensayo_id', String(savedId))
+
+                window.history.replaceState(null, '', newUrl.toString())
+
+            }
+
+            localStorage.removeItem(`${moduleConfig.draftKey}:${ensayoId ?? 'new'}`)
+
+            // El formulario queda cargado para seguir editando
+            if (window.parent !== window) window.parent.postMessage({ type: 'ENSAYO_SAVED' }, '*')
+
+            toast.success(download ? `${moduleConfig.title} guardado y descargado.` : `${moduleConfig.title} guardado.`)
+
+        } catch (error) {
+
+            const message = axios.isAxiosError(error)
+
+                ? error.response?.data?.detail || `No se pudo generar ${moduleConfig.title}.`
+
+                : `No se pudo generar ${moduleConfig.title}.`
+
+            toast.error(message)
+
+        } finally {
+
+            setLoading(false)
+
+        }
+
+    }, [ensayoId, form, moduleConfig])
+
+
+
+    if (!moduleConfig) {
+
+        return (
+
+            <div className="min-h-screen bg-[#eef1f5] p-6">
+
+                <div className="mx-auto max-w-3xl border border-red-300 bg-white p-6 text-center shadow-sm">
+
+                    <h1 className="text-xl font-bold text-slate-900">Modulo no encontrado</h1>
+
+                    <p className="mt-2 text-sm text-slate-600">La ruta del iframe no coincide con ningun formulario configurado.</p>
+
+                </div>
+
+            </div>
+
+        )
+
+    }
+
+
 
     return (
-        <div className="min-h-screen bg-slate-100 p-4 md:p-6">
-            <div className="mx-auto max-w-[1100px] space-y-4">
-                <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 shadow-sm">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-300 bg-slate-50">
-                        <Beaker className="h-5 w-5 text-slate-900" />
-                    </div>
-                    <div>
-                        <h1 className="text-base font-semibold text-slate-900 md:text-lg">{MODULE_TITLE.toUpperCase()}</h1>
-                        <p className="text-xs text-slate-600">Replica del formato Excel oficial</p>
-                    </div>
+
+        <div className="min-h-screen bg-[#eef1f5] p-4 md:p-6">
+
+            <div className="mx-auto max-w-[1280px] space-y-4">
+
+                <div className="border border-slate-300 bg-white px-4 py-3 shadow-sm">
+
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">Modulo iframe</p>
+
+                    <h1 className="mt-1 text-base font-semibold text-slate-900 md:text-lg">{moduleConfig.title.toUpperCase()}</h1>
+
                 </div>
 
-                {showDraftBanner ? (
-                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 shadow-sm transition-all duration-300 animate-in fade-in slide-in-from-top-2">
-                        <div className="flex items-start gap-2.5 text-sm text-amber-800">
-                            <span className="text-lg leading-none">⚠️</span>
-                            <div>
-                                <p className="font-semibold text-amber-900">Cambios locales no guardados detectados</p>
-                                <p className="text-xs text-amber-700 mt-0.5">
-                                    Se encontró un borrador en este navegador que tiene diferencias con la versión guardada en el servidor.
-                                </p>
-                            </div>
-                        </div>
-                        <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
-                            <button
-                                onClick={() => {
-                                    if (draftData) setForm(draftData)
-                                    setShowDraftBanner(false)
-                                    toast.success('Borrador local recuperado con éxito.')
-                                }}
-                                className="rounded-lg bg-amber-600 hover:bg-amber-700 px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm transition"
-                            >
-                                Recuperar Trabajo
-                            </button>
-                            <button
-                                onClick={() => {
-                                    localStorage.removeItem(`${DRAFT_KEY}:${ensayoId ?? 'new'}`)
-                                    setShowDraftBanner(false)
-                                    setDraftData(null)
-                                    toast.success('Borrador descartado.')
-                                }}
-                                className="rounded-lg border border-amber-300 bg-white hover:bg-amber-50 px-3.5 py-1.5 text-xs font-semibold text-amber-800 shadow-sm transition"
-                            >
-                                Descartar
-                            </button>
-                        </div>
-                    </div>
-                ) : null}
+
 
                 {loadingEdit ? (
-                    <div className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-600 shadow-sm">
+
+                    <div className="flex h-10 items-center gap-2 border border-slate-300 bg-white px-3 text-sm text-slate-600 shadow-sm">
+
                         <Loader2 className="h-4 w-4 animate-spin" />
+
                         Cargando ensayo...
+
                     </div>
+
                 ) : null}
 
-                <div className="overflow-hidden rounded-2xl border border-slate-300 bg-white shadow-sm">
-                    <div className="border-b border-slate-300 bg-slate-50 px-4 py-4 text-center">
-                        <p className="text-[24px] font-semibold leading-tight text-slate-900">LABORATORIO DE ENSAYO DE MATERIALES</p>
-                        <p className="text-lg font-semibold leading-tight text-slate-900">FORMATO N° F-LEM-P-SU-15.01</p>
+
+
+                <div className="overflow-hidden border border-black bg-white shadow-[0_14px_36px_rgba(15,23,42,0.08)]">
+
+                    <div className="border-b border-black px-4 py-5 text-center">
+
+                        <p className="text-[24px] font-semibold leading-tight tracking-[0.04em] text-black">LABORATORIO DE ENSAYO DE MATERIALES</p>
+
+                        <p className="mt-1 text-lg font-semibold leading-tight text-black">FORMATO N° {moduleConfig.formatCode}</p>
+
                     </div>
 
-                    <div className="border-b border-slate-300 bg-white px-3 py-3">
-                        <table className="w-full table-fixed border border-slate-300 text-sm">
-                            <thead className="bg-slate-100 text-xs font-semibold text-slate-800">
+
+
+                    <div className="border-b border-black px-3 py-3">
+
+                        <table className="w-full table-fixed border-collapse text-[13px] text-black">
+
+                            <thead className="text-[13px] font-semibold">
+
                                 <tr>
-                                    <th className="border-r border-slate-300 py-1" colSpan={2}>MUESTRA</th>
-                                    <th className="border-r border-slate-300 py-1">N° OT</th>
-                                    <th className="border-r border-slate-300 py-1" colSpan={2}>FECHA DE ENSAYO</th>
-                                    <th className="py-1" colSpan={2}>REALIZADO</th>
+
+                                    <th className="border border-black px-2 py-1.5">MUESTRA</th>
+
+                                    <th className="border border-black px-2 py-1.5">No OT</th>
+
+                                    <th className="border border-black px-2 py-1.5">FECHA DE ENSAYO</th>
+
+                                    <th className="border border-black px-2 py-1.5">REALIZADO</th>
+
                                 </tr>
+
                             </thead>
+
                             <tbody>
+
                                 <tr>
-                                    <td className="border-r border-t border-slate-300 p-1" colSpan={2}>
-                                        <input
-                                            className={`${denseInputClass} text-center`}
-                                            value={form.muestra}
-                                            onChange={(e) => setField('muestra', e.target.value)}
-                                            onBlur={() => setField('muestra', normalizeMuestraCode(form.muestra))}
-                                            autoComplete="off"
-                                            data-lpignore="true"
-                                        />
-                                    </td>
-                                    <td className="border-r border-t border-slate-300 p-1">
-                                        <input
-                                            className={`${denseInputClass} text-center`}
-                                            value={form.numero_ot}
-                                            onChange={(e) => setField('numero_ot', e.target.value)}
-                                            onBlur={() => setField('numero_ot', normalizeNumeroOtCode(form.numero_ot))}
-                                            autoComplete="off"
-                                            data-lpignore="true"
-                                        />
-                                    </td>
-                                    <td className="border-r border-t border-slate-300 p-1" colSpan={2}>
-                                        <input
-                                            className={`${denseInputClass} text-center`}
-                                            value={form.fecha_ensayo}
-                                            onChange={(e) => setField('fecha_ensayo', e.target.value)}
-                                            onBlur={() => setField('fecha_ensayo', normalizeFlexibleDate(form.fecha_ensayo))}
-                                            autoComplete="off"
-                                            data-lpignore="true"
-                                            placeholder="YYYY/MM/DD"
-                                        />
-                                    </td>
-                                    <td className="border-t border-slate-300 p-1" colSpan={2}>
-                                        <input
-                                            className={`${denseInputClass} text-center`}
-                                            value={form.realizado_por}
-                                            onChange={(e) => setField('realizado_por', e.target.value)}
-                                            autoComplete="off"
-                                            data-lpignore="true"
-                                        />
-                                    </td>
+
+                                    <td className="border border-black p-0">{renderText('muestra', { align: 'center', normalizeOnBlur: normalizeMuestraCode, className: SHEET_META_INPUT_CLASS })}</td>
+
+                                    <td className="border border-black p-0">{renderText('numero_ot', { align: 'center', normalizeOnBlur: normalizeNumeroOtCode, className: SHEET_META_INPUT_CLASS })}</td>
+
+                                    <td className="border border-black p-0">{renderText('fecha_ensayo', { align: 'center', placeholder: 'YYYY/MM/DD', normalizeOnBlur: normalizeFlexibleDate, className: SHEET_META_INPUT_CLASS })}</td>
+
+                                    <td className="border border-black p-0">{renderText('realizado_por', { align: 'center', className: SHEET_META_INPUT_CLASS })}</td>
+
                                 </tr>
+
                             </tbody>
-                        </table>
-                    </div>
 
-                    <div className="border-b border-slate-300 bg-slate-100 px-4 py-3 text-center">
-                        <p className="text-[15px] font-semibold leading-tight text-slate-900">
-                            METODO DE ENSAYONORMALIZADO PARA LA DETERMINACION CUANTITATIVA DE SULFATOS SOLUBLES EN SUELOS Y AGUA SUBTERRANEA
-                        </p>
-                        <p className="text-[14px] font-semibold text-slate-900">NORMA NTP 339.178</p>
-                    </div>
-
-                    <div className="p-3">
-                        <div className="mb-4 w-full max-w-md overflow-hidden rounded-lg border border-slate-300">
-                            <div className="border-b border-slate-300 bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-800 text-center">
-                                CONDICIONES DE SECADO
-                            </div>
-                            <table className="w-full table-fixed text-sm">
-                                <tbody>
-                                    {[
-                                        { label: 'SECADO AL AIRE', key: 'condicion_secado_aire' as const },
-                                        { label: 'SECADO EN HORNO 80°C', key: 'condicion_secado_horno' as const },
-                                    ].map((row) => (
-                                        <tr key={row.key}>
-                                            <td className="border-t border-r border-slate-300 px-2 py-1 text-xs">{row.label}</td>
-                                            <td className="border-t border-slate-300 p-1 w-20">
-                                                <select
-                                                    className={denseInputClass}
-                                                    value={form[row.key]}
-                                                    onChange={(e) => setField(row.key, e.target.value)}
-                                                >
-                                                    {SECADO_OPTIONS.map((opt) => (
-                                                        <option key={opt} value={opt}>
-                                                            {opt}
-                                                        </option>
-                                                    ))}
-                                                </select>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-
-                        <table className="w-full table-fixed border border-slate-300 text-sm">
-                            <colgroup>
-                                <col className="w-10" />
-                                <col />
-                                <col className="w-20" />
-                                <col className="w-44" />
-                            </colgroup>
-                            <tbody>
-                                <tr className="bg-slate-50 text-xs font-semibold text-slate-800">
-                                    <td className="border-r border-slate-300 py-1" colSpan={2}>Capsula</td>
-                                    <td className="border-r border-slate-300 py-1 text-center">N°</td>
-                                    <td className="py-1">
-                                        <input
-                                            className={denseInputClass}
-                                            value={form.capsula_numero}
-                                            onChange={(e) => setField('capsula_numero', e.target.value)}
-                                            autoComplete="off"
-                                            data-lpignore="true"
-                                        />
-                                    </td>
-                                </tr>
-                                {[
-                                    {
-                                        key: 'a',
-                                        label: 'Volumen de agua destilada',
-                                        unit: '(ml)',
-                                        field: 'volumen_agua_ml' as const,
-                                        value: form.volumen_agua_ml,
-                                        readonly: false,
-                                    },
-                                    {
-                                        key: 'b',
-                                        label: 'Peso de suelo seco',
-                                        unit: '(g)',
-                                        field: 'peso_suelo_seco_g' as const,
-                                        value: form.peso_suelo_seco_g,
-                                        readonly: false,
-                                    },
-                                    {
-                                        key: 'c',
-                                        label: 'Alicuota Tomada',
-                                        unit: '(ml)',
-                                        field: 'alicuota_tomada_ml' as const,
-                                        value: form.alicuota_tomada_ml,
-                                        readonly: false,
-                                    },
-                                    {
-                                        key: 'd',
-                                        label: 'Titulacion del suelo (b/(a/c))',
-                                        unit: '(g)',
-                                        field: 'titulacion_suelo_g' as const,
-                                        value: resolvedTitulacion,
-                                        readonly: true,
-                                    },
-                                    {
-                                        key: 'e',
-                                        label: 'Solucion de Cloruro de Bario',
-                                        unit: '(BaCl₂)',
-                                        field: 'solucion_cloruro_bario' as const,
-                                        value: form.solucion_cloruro_bario,
-                                        readonly: false,
-                                        isText: true,
-                                    },
-                                    {
-                                        key: 'f',
-                                        label: 'Peso del Crisol',
-                                        unit: '(g)',
-                                        field: 'peso_crisol_g' as const,
-                                        value: form.peso_crisol_g,
-                                        readonly: false,
-                                    },
-                                    {
-                                        key: 'g',
-                                        label: 'Peso del Crisol + Residuos de Sulfatos',
-                                        unit: '(g)',
-                                        field: 'peso_crisol_residuos_g' as const,
-                                        value: form.peso_crisol_residuos_g,
-                                        readonly: false,
-                                    },
-                                    {
-                                        key: 'h',
-                                        label: 'Residuo de Sulfatos (g-f)',
-                                        unit: '(g)',
-                                        field: 'residuo_sulfatos_g' as const,
-                                        value: resolvedResiduo,
-                                        readonly: true,
-                                    },
-                                    {
-                                        key: 'i',
-                                        label: 'Contenido de Sulfatos ((h*411500)/d)',
-                                        unit: '(ppm)',
-                                        field: 'contenido_sulfatos_ppm' as const,
-                                        value: resolvedContenido,
-                                        readonly: true,
-                                    },
-                                ].map((row) => (
-                                    <tr key={row.key}>
-                                        <td className="border-t border-r border-slate-300 px-2 py-1 text-xs font-semibold">{row.key}</td>
-                                        <td className="border-t border-r border-slate-300 px-2 py-1 text-xs">{row.label}</td>
-                                        <td className="border-t border-r border-slate-300 px-2 py-1 text-center text-xs">{row.unit}</td>
-                                        <td className="border-t border-slate-300 p-1">
-                                            {row.isText ? (
-                                                <input
-                                                    className={denseInputClass}
-                                                    value={row.value as string}
-                                                    onChange={(e) => setField(row.field, e.target.value)}
-                                                />
-                                            ) : (
-                                                <input
-                                                    type="number"
-                                                    step="any"
-                                                    className={row.readonly ? readOnlyInputClass : denseInputClass}
-                                                    value={row.value ?? ''}
-                                                    onChange={(e) => {
-                                                        if (row.readonly) return
-                                                        setField(row.field, parseNum(e.target.value))
-                                                    }}
-                                                    readOnly={row.readonly}
-                                                />
-                                            )}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
                         </table>
 
-                        <div className="mt-4 overflow-hidden rounded-lg border border-slate-300">
-                            <div className="border-b border-slate-300 bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-800">
-                                Observaciones
-                            </div>
-                            <div className="p-2">
-                                <textarea
-                                    className="w-full resize-none rounded-md border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 shadow-sm transition focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500/35"
-                                    rows={3}
-                                    value={form.observaciones}
-                                    onChange={(e) => setField('observaciones', e.target.value)}
-                                    autoComplete="off"
-                                    data-lpignore="true"
-                                />
-                            </div>
-                        </div>
-
-                        <div className="mt-4 w-full max-w-md overflow-hidden rounded-lg border border-slate-300">
-                            <table className="w-full table-fixed text-sm">
-                                <thead className="bg-slate-100 text-xs font-semibold text-slate-800">
-                                    <tr>
-                                        <th className="border-b border-r border-slate-300 py-1">Equipo utilizado</th>
-                                        <th className="border-b border-slate-300 py-1">Código</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {[
-                                        { label: 'Horno', key: 'equipo_horno_codigo' as const },
-                                        { label: 'Mufla', key: 'equipo_mufla_codigo' as const },
-                                        { label: 'Balanza 0.01', key: 'equipo_balanza_001_codigo' as const },
-                                        { label: 'Balanza', key: 'equipo_balanza_codigo' as const },
-                                    ].map((row) => (
-                                        <tr key={row.key}>
-                                            <td className="border-t border-r border-slate-300 px-2 py-1 text-xs">{row.label}</td>
-                                            <td className="border-t border-slate-300 p-1">
-                                                <input
-                                                    className={denseInputClass}
-                                                    value={form[row.key]}
-                                                    onChange={(e) => setField(row.key, e.target.value)}
-                                                />
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-
-                        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 md:justify-end">
-                            <div className="overflow-hidden rounded-lg border border-slate-300 bg-slate-50">
-                                <div className="border-b border-slate-300 px-2 py-1 text-sm font-semibold">Revisado</div>
-                                <div className="space-y-2 p-2">
-                                    <select
-                                        className={denseInputClass}
-                                        value={form.revisado_por}
-                                        onChange={(e) => {
-                                            const v = e.target.value
-                                            setField('revisado_por', v)
-                                            if (v !== '-') {
-                                                setField('revisado_fecha', normalizeFlexibleDate(new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Lima' })))
-                                            }
-                                        }}
-                                    >
-                                        {REVISORES.map((opt) => (
-                                            <option key={opt} value={opt}>
-                                                {opt}
-                                            </option>
-                                        ))}
-                                    </select>
-                                    <input
-                                        className={denseInputClass}
-                                        value={form.revisado_fecha}
-                                        onChange={(e) => setField('revisado_fecha', e.target.value)}
-                                        onBlur={() => setField('revisado_fecha', normalizeFlexibleDate(form.revisado_fecha))}
-                                        autoComplete="off"
-                                        data-lpignore="true"
-                                        placeholder="YYYY/MM/DD"
-                                    />
-                                </div>
-                            </div>
-                            <div className="overflow-hidden rounded-lg border border-slate-300 bg-slate-50">
-                                <div className="border-b border-slate-300 px-2 py-1 text-sm font-semibold">Aprobado</div>
-                                <div className="space-y-2 p-2">
-                                    <select
-                                        className={denseInputClass}
-                                        value={form.aprobado_por}
-                                        onChange={(e) => {
-                                            const v = e.target.value
-                                            setField('aprobado_por', v)
-                                            if (v !== '-') {
-                                                setField('aprobado_fecha', normalizeFlexibleDate(new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Lima' })))
-                                            }
-                                        }}
-                                    >
-                                        {APROBADORES.map((opt) => (
-                                            <option key={opt} value={opt}>
-                                                {opt}
-                                            </option>
-                                        ))}
-                                    </select>
-                                    <input
-                                        className={denseInputClass}
-                                        value={form.aprobado_fecha}
-                                        onChange={(e) => setField('aprobado_fecha', e.target.value)}
-                                        onBlur={() => setField('aprobado_fecha', normalizeFlexibleDate(form.aprobado_fecha))}
-                                        autoComplete="off"
-                                        data-lpignore="true"
-                                        placeholder="YYYY/MM/DD"
-                                    />
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-                            <button
-                                onClick={clearAll}
-                                disabled={loading}
-                                className="flex h-11 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white font-medium text-slate-900 shadow-sm transition hover:bg-slate-100 disabled:opacity-50"
-                            >
-                                <Trash2 className="h-4 w-4" />
-                                Limpiar todo
-                            </button>
-                            <button
-                                onClick={() => setPendingFormatAction(false)}
-                                disabled={loading}
-                                className="h-11 rounded-lg border border-slate-900 bg-white font-semibold text-slate-900 shadow-sm transition hover:bg-slate-100 disabled:opacity-50"
-                            >
-                                {loading ? 'Guardando...' : 'Guardar'}
-                            </button>
-                            <button
-                                onClick={() => setPendingFormatAction(true)}
-                                disabled={loading}
-                                className="flex h-11 items-center justify-center gap-2 rounded-lg border border-emerald-700 bg-emerald-700 font-semibold text-white shadow-sm transition hover:bg-emerald-800 disabled:opacity-50"
-                            >
-                                {loading ? (
-                                    <>
-                                        <Loader2 className="h-4 w-4 animate-spin" />
-                                        Procesando...
-                                    </>
-                                ) : (
-                                    <>
-                                        <Download className="h-4 w-4" />
-                                        Guardar y Descargar
-                                    </>
-                                )}
-                            </button>
-                        </div>
                     </div>
+
+
+
+                    <div className="border-b border-black px-6 py-4 text-center">
+
+                        <p className="text-[15px] font-semibold leading-tight text-black">{moduleConfig.heading}</p>
+
+                        <p className="mt-1 text-[14px] font-semibold text-black">{moduleConfig.standard}</p>
+
+                    </div>
+
+
+
+                    <div className="space-y-4 p-3 md:p-4">{moduleConfig.renderBody(tools)}</div>
+
                 </div>
+
+
+
+                <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+
+                    <button
+
+                        type="button"
+
+                        className="inline-flex items-center justify-center gap-2 border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+
+                        onClick={clearAll}
+
+                        disabled={loading}
+
+                    >
+
+                        <RotateCcw className="h-4 w-4" />
+
+                        Limpiar formulario
+
+                    </button>
+
+                    <button
+
+                        type="button"
+
+                        className="inline-flex items-center justify-center gap-2 border border-slate-300 bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
+
+                        onClick={() => void save(false)}
+
+                        disabled={loading}
+
+                    >
+
+                        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+
+                        Guardar
+
+                    </button>
+
+                    <button
+
+                        type="button"
+
+                        className="inline-flex items-center justify-center gap-2 border border-blue-600 bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-70"
+
+                        onClick={() => void save(true)}
+
+                        disabled={loading}
+
+                    >
+
+                        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+
+                        Guardar y descargar Excel
+
+                    </button>
+
+                </div>
+
             </div>
-            <FormatConfirmModal
-                open={pendingFormatAction !== null}
-                formatLabel={buildFormatPreview(form.muestra, 'SU', 'SULFATOS SOLUBLES')}
-                actionLabel={pendingFormatAction ? 'Guardar y Descargar' : 'Guardar'}
-                onClose={() => setPendingFormatAction(null)}
-                onConfirm={() => {
-                    if (pendingFormatAction === null) return
-                    const shouldDownload = pendingFormatAction
-                    setPendingFormatAction(null)
-                    void save(shouldDownload)
-                }}
-            />
 
         </div>
+
     )
+
 }
+

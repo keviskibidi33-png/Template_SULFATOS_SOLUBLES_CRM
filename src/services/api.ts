@@ -178,7 +178,7 @@ export async function saveEnsayo(payload: SulfatosSolublesPayload, ensayoId?: nu
     return data
 }
 
-export async function saveAndDownload(payload: SulfatosSolublesPayload, ensayoId?: number): Promise<{ blob: Blob; filename?: string }> {
+export async function saveAndDownload(payload: SulfatosSolublesPayload, ensayoId?: number): Promise<{ blob: Blob; ensayoId?: number; filename?: string }> {
     const response = await api.post(`/api/${MODULE}/excel`, payload, {
         params: {
             download: true,
@@ -186,8 +186,9 @@ export async function saveAndDownload(payload: SulfatosSolublesPayload, ensayoId
         },
         responseType: 'blob',
     })
+    const parsedId = Number(response.headers['x-sulf-id'])
     const filename = extractFilename(response.headers['content-disposition'])
-    return { blob: response.data, filename }
+    return { blob: response.data, ensayoId: Number.isFinite(parsedId) ? parsedId : undefined, filename }
 }
 
 export async function getEnsayoDetail(ensayoId: number): Promise<EnsayoDetail> {
